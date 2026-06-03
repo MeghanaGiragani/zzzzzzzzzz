@@ -1,0 +1,2251 @@
+test_ingestion.py:
+ 
+# =========================================================
+# UNIT TESTS FOR ingestion_pipeline.py
+# =========================================================
+ 
+# os is used for file and folder path operations
+import os
+ 
+# sys is used to add project root path for importing files
+import sys
+ 
+# shutil is used to delete temporary folders after testing
+import shutil
+ 
+# tempfile is used to create temporary folders for testing
+import tempfile
+ 
+# pytest is used for writing and running test cases
+import pytest
+ 
+# io and redirect_stdout are used to hide internal print statements
+# from ingestion_pipeline.py during testing
+import io
+from contextlib import redirect_stdout
+ 
+# gc is used to force garbage collection.
+# This helps release Chroma DB file handles before deleting temporary folders.
+import gc
+ 
+ 
+# =========================================================
+# ADD PROJECT ROOT PATH
+# =========================================================
+ 
+# This allows this test file to import ingestion_pipeline.py
+# from the main project folder.
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ 
+ 
+# =========================================================
+# IMPORT FUNCTIONS FROM ingestion_pipeline.py
+# =========================================================
+ 
+from ingestion_pipeline import (
+    load_documents,
+    split_documents,
+    LocalEmbeddings,
+    create_vector_store
+)
+ 
+ 
+# =========================================================
+# HELPER FUNCTION TO HIDE INTERNAL PRINTS
+# =========================================================
+ 
+def run_without_internal_prints(function, *args, **kwargs):
+    """
+    This helper function runs any function while hiding print statements
+    written inside ingestion_pipeline.py.
+ 
+    Reason:
+    ingestion_pipeline.py already prints internal messages.
+    During unit testing, we only want to display:
+    test name, expected output, and actual output.
+    """
+ 
+    # Create a temporary string buffer to capture internal print output
+    hidden_output = io.StringIO()
+ 
+    # Redirect all print statements from the called function into hidden_output
+    with redirect_stdout(hidden_output):
+        return function(*args, **kwargs)
+ 
+ 
+# =========================================================
+# HELPER FUNCTION TO SAFELY DELETE TEMPORARY FOLDERS
+# =========================================================
+ 
+def safe_delete_folder(folder_path):
+    """
+    Safely deletes a folder during testing.
+ 
+    Reason:
+    Chroma DB can keep some files open for a short time on Windows.
+    If shutil.rmtree() tries to delete those locked files immediately,
+    Windows may raise PermissionError.
+ 
+    This helper prevents cleanup errors from failing the test.
+    """
+ 
+    # Force Python to clean unused objects and release file references
+    gc.collect()
+ 
+    # Delete folder only if it exists
+    if os.path.exists(folder_path):
+        shutil.rmtree(folder_path, ignore_errors=True)
+ 
+ 
+# =========================================================
+# HELPER FUNCTIONS FOR TEST DATA
+# =========================================================
+ 
+def create_sample_docs():
+    """
+    This function creates a temporary folder with one .txt file.
+ 
+    Flow:
+    1. Create a temporary folder.
+    2. Create a sample.txt file inside that folder.
+    3. Write sample text into the file.
+    4. Return the temporary folder path.
+ 
+    This is used for valid test cases because load_documents()
+    needs a real folder containing .txt files.
+    """
+ 
+    # Create a temporary folder
+    temp_dir = tempfile.mkdtemp()
+ 
+    # Create a sample text file path inside the temporary folder
+    file_path = os.path.join(temp_dir, "sample.txt")
+ 
+    # Write sample content into the .txt file
+    with open(file_path, "w", encoding="utf-8") as file:
+        file.write("Sample document for testing ingestion pipeline.")
+ 
+    # Return temporary folder path
+    return temp_dir
+ 
+ 
+def create_folder_without_txt_file():
+    """
+    This function creates a temporary folder with a non-text file.
+ 
+    Flow:
+    1. Create a temporary folder.
+    2. Create a sample.pdf file inside that folder.
+    3. Return the temporary folder path.
+ 
+    This is used to test whether load_documents() raises ValueError
+    when the folder exists but does not contain any .txt files.
+    """
+ 
+    # Create a temporary folder
+    temp_dir = tempfile.mkdtemp()
+ 
+    # Create a non-text file inside the temporary folder
+    file_path = os.path.join(temp_dir, "sample.pdf")
+ 
+    # Write sample content into the non-text file
+    with open(file_path, "w", encoding="utf-8") as file:
+        file.write("This is not a text file.")
+ 
+    # Return temporary folder path
+    return temp_dir
+ 
+ 
+# =========================================================
+# VALID TEST CASES
+# =========================================================
+ 
+def test_load_documents_valid():
+    """
+    Test whether load_documents() loads .txt files successfully.
+    """
+ 
+    print("\n" + "=" * 80)
+    print("VALID TEST CASES")
+    print("=" * 80)
+ 
+    print("\ntest_load_documents_valid")
+ 
+    # Create temporary folder with one valid .txt file
+    temp_dir = create_sample_docs()
+ 
+    try:
+        # Expected result
+        expected_output = "non-empty list of documents"
+ 
+        # Call load_documents() using the temporary folder
+        actual_output = run_without_internal_prints(load_documents, temp_dir)
+ 
+        # Print expected and actual output
+        print(f"Expected Output: {expected_output}")
+        print(f"Actual Output  : {type(actual_output).__name__}")
+ 
+        # Output should be a list
+        assert isinstance(actual_output, list)
+ 
+        # The list should contain at least one loaded document
+        assert len(actual_output) > 0
+ 
+    finally:
+        # Delete temporary folder safely
+        safe_delete_folder(temp_dir)
+ 
+ 
+def test_split_documents_valid():
+    """
+    Test whether split_documents() splits loaded documents into chunks.
+    """
+ 
+    print("\ntest_split_documents_valid")
+ 
+    # Create temporary folder with one sample .txt file
+    temp_dir = create_sample_docs()
+ 
+    try:
+        # First load documents from temporary folder
+        documents = run_without_internal_prints(load_documents, temp_dir)
+ 
+        # Expected result
+        expected_output = "non-empty list of document chunks"
+ 
+        # Split the loaded documents into chunks
+        actual_output = run_without_internal_prints(split_documents, documents)
+ 
+        # Print expected and actual output
+        print(f"Expected Output: {expected_output}")
+        print(f"Actual Output  : {type(actual_output).__name__}")
+ 
+        # Output should be a list
+        assert isinstance(actual_output, list)
+ 
+        # At least one chunk should be created
+        assert len(actual_output) > 0
+ 
+    finally:
+        # Delete temporary folder safely
+        safe_delete_folder(temp_dir)
+ 
+ 
+def test_embed_documents_valid():
+    """
+    Test whether embed_documents() converts text documents into vectors.
+    """
+ 
+    print("\ntest_embed_documents_valid")
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Input documents for testing
+    input_texts = ["This is document one", "This is document two"]
+ 
+    # Expected result
+    expected_output = "list containing two embedding vectors"
+ 
+    # Convert documents into TF-IDF vectors
+    actual_output = run_without_internal_prints(
+        embeddings.embed_documents,
+        input_texts
+    )
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {type(actual_output).__name__}")
+ 
+    # Output should be a list
+    assert isinstance(actual_output, list)
+ 
+    # Since two documents are passed, two vectors should be returned
+    assert len(actual_output) == 2
+ 
+    # Each vector should also be a list
+    assert all(isinstance(vector, list) for vector in actual_output)
+ 
+ 
+def test_embed_query_valid():
+    """
+    Test whether embed_query() converts a query into a vector.
+ 
+    Important:
+    embed_documents() must be called first because TF-IDF model
+    should be fitted before embedding a query.
+    """
+ 
+    print("\ntest_embed_query_valid")
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Fit the TF-IDF model using sample document
+    run_without_internal_prints(
+        embeddings.embed_documents,
+        ["sample document for testing"]
+    )
+ 
+    # Expected result
+    expected_output = "non-empty query embedding vector"
+ 
+    # Convert query into vector
+    actual_output = run_without_internal_prints(
+        embeddings.embed_query,
+        "sample"
+    )
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {type(actual_output).__name__}")
+ 
+    # Output should be a list
+    assert isinstance(actual_output, list)
+ 
+    # Query vector should not be empty
+    assert len(actual_output) > 0
+ 
+ 
+def test_create_vector_store_valid():
+    """
+    Test whether create_vector_store() creates a vector database successfully.
+ 
+    This test creates a real temporary Chroma DB folder.
+    On Windows, Chroma may lock some files temporarily.
+    So cleanup is handled using safe_delete_folder().
+    """
+ 
+    print("\ntest_create_vector_store_valid")
+ 
+    # Create temporary folder for documents
+    temp_docs_dir = create_sample_docs()
+ 
+    # Create temporary folder for vector database
+    temp_db_dir = tempfile.mkdtemp()
+ 
+    # Store vectorstore reference here so it can be cleared in finally block
+    actual_output = None
+ 
+    try:
+        # Load documents from temporary docs folder
+        documents = run_without_internal_prints(load_documents, temp_docs_dir)
+ 
+        # Split loaded documents into chunks
+        chunks = run_without_internal_prints(split_documents, documents)
+ 
+        # Expected result
+        expected_output = "valid vector store object"
+ 
+        # Create vector database using chunks
+        actual_output = run_without_internal_prints(
+            create_vector_store,
+            chunks,
+            temp_db_dir
+        )
+ 
+        # Print expected and actual output
+        print(f"Expected Output: {expected_output}")
+        print(f"Actual Output  : {type(actual_output).__name__}")
+ 
+        # Vector store should not be None
+        assert actual_output is not None
+ 
+        # Chroma vector store should have get() method
+        assert hasattr(actual_output, "get")
+ 
+    finally:
+        # Remove reference to vectorstore object
+        # This helps release Chroma file handles
+        actual_output = None
+ 
+        # Force garbage collection before deleting folders
+        gc.collect()
+ 
+        # Delete temporary document folder safely
+        safe_delete_folder(temp_docs_dir)
+ 
+        # Delete temporary database folder safely
+        safe_delete_folder(temp_db_dir)
+ 
+ 
+# =========================================================
+# INVALID TEST CASES
+# =========================================================
+ 
+def test_load_documents_wrong_data_type():
+    """
+    Test whether load_documents() raises TypeError
+    when docs_path is not a string.
+    """
+ 
+    print("\n" + "=" * 80)
+    print("INVALID TEST CASES")
+    print("=" * 80)
+ 
+    print("\ntest_load_documents_wrong_data_type")
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # Passing integer instead of string should raise TypeError
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(load_documents, 123)
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_load_documents_empty_path():
+    """
+    Test whether load_documents() raises ValueError
+    when an empty string is passed as docs_path.
+    """
+ 
+    print("\ntest_load_documents_empty_path")
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # Empty path should raise ValueError
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(load_documents, "")
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_load_documents_path_not_found():
+    """
+    Test whether load_documents() raises FileNotFoundError
+    when folder path does not exist.
+    """
+ 
+    print("\ntest_load_documents_path_not_found")
+ 
+    # Expected error
+    expected_output = "FileNotFoundError"
+ 
+    # Passing non-existing folder should raise FileNotFoundError
+    with pytest.raises(FileNotFoundError) as error:
+        run_without_internal_prints(load_documents, "folder_that_does_not_exist")
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_load_documents_no_txt_files():
+    """
+    Test whether load_documents() raises ValueError
+    when folder exists but does not contain any .txt file.
+    """
+ 
+    print("\ntest_load_documents_no_txt_files")
+ 
+    # Create folder with only non-text file
+    temp_dir = create_folder_without_txt_file()
+ 
+    try:
+        # Expected error
+        expected_output = "ValueError"
+ 
+        # Since there is no .txt file, ValueError should be raised
+        with pytest.raises(ValueError) as error:
+            run_without_internal_prints(load_documents, temp_dir)
+ 
+        # Capture actual error name
+        actual_output = type(error.value).__name__
+ 
+        # Print expected and actual output
+        print(f"Expected Output: {expected_output}")
+        print(f"Actual Output  : {actual_output}")
+ 
+        # Compare expected error with actual error
+        assert actual_output == expected_output
+ 
+    finally:
+        # Delete temporary folder safely
+        safe_delete_folder(temp_dir)
+ 
+ 
+def test_load_documents_wrong_number_of_args():
+    """
+    Test whether load_documents() raises TypeError
+    when extra argument is passed.
+    """
+ 
+    print("\ntest_load_documents_wrong_number_of_args")
+ 
+    # Create temporary folder with .txt file
+    temp_dir = create_sample_docs()
+ 
+    try:
+        # Expected error
+        expected_output = "TypeError"
+ 
+        # load_documents() accepts only one argument.
+        # Passing two arguments should raise TypeError.
+        with pytest.raises(TypeError) as error:
+            run_without_internal_prints(load_documents, temp_dir, 1)
+ 
+        # Capture actual error name
+        actual_output = type(error.value).__name__
+ 
+        # Print expected and actual output
+        print(f"Expected Output: {expected_output}")
+        print(f"Actual Output  : {actual_output}")
+ 
+        # Compare expected error with actual error
+        assert actual_output == expected_output
+ 
+    finally:
+        # Delete temporary folder safely
+        safe_delete_folder(temp_dir)
+ 
+ 
+def test_split_documents_wrong_data_type():
+    """
+    Test whether split_documents() raises TypeError
+    when input is not a list.
+    """
+ 
+    print("\ntest_split_documents_wrong_data_type")
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # Passing string instead of list should raise TypeError
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(split_documents, "invalid")
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_split_documents_empty_list():
+    """
+    Test whether split_documents() raises ValueError
+    when empty list is passed.
+    """
+ 
+    print("\ntest_split_documents_empty_list")
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # Empty list should raise ValueError
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(split_documents, [])
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_split_documents_wrong_number_of_args():
+    """
+    Test whether split_documents() raises TypeError
+    when extra argument is passed.
+    """
+ 
+    print("\ntest_split_documents_wrong_number_of_args")
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # split_documents() accepts only one argument.
+    # Passing extra argument should raise TypeError.
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(split_documents, [], "extra_argument")
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_embed_documents_wrong_data_type():
+    """
+    Test whether embed_documents() raises TypeError
+    when input is not a list.
+    """
+ 
+    print("\ntest_embed_documents_wrong_data_type")
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # Passing string instead of list should raise TypeError
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(embeddings.embed_documents, "invalid")
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_embed_documents_empty_list():
+    """
+    Test whether embed_documents() raises ValueError
+    when empty list is passed.
+    """
+ 
+    print("\ntest_embed_documents_empty_list")
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # Empty list should raise ValueError
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(embeddings.embed_documents, [])
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_embed_documents_list_with_non_string_value():
+    """
+    Test whether embed_documents() raises TypeError
+    when the list contains a non-string value.
+    """
+ 
+    print("\ntest_embed_documents_list_with_non_string_value")
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # List contains integer, so TypeError should be raised
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            embeddings.embed_documents,
+            ["valid text", 123]
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_embed_query_wrong_data_type():
+    """
+    Test whether embed_query() raises TypeError
+    when query is not a string.
+    """
+ 
+    print("\ntest_embed_query_wrong_data_type")
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Fit model before calling embed_query()
+    run_without_internal_prints(
+        embeddings.embed_documents,
+        ["sample document"]
+    )
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # Passing integer query should raise TypeError
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(embeddings.embed_query, 123)
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_embed_query_empty_string():
+    """
+    Test whether embed_query() raises ValueError
+    when query is empty.
+    """
+ 
+    print("\ntest_embed_query_empty_string")
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Fit model before calling embed_query()
+    run_without_internal_prints(
+        embeddings.embed_documents,
+        ["sample document"]
+    )
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # Empty query should raise ValueError
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(embeddings.embed_query, "")
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_embed_query_without_fitting_model():
+    """
+    Test whether embed_query() raises ValueError
+    when embed_documents() is not called before it.
+    """
+ 
+    print("\ntest_embed_query_without_fitting_model")
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # Model is not fitted, so ValueError should be raised
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(embeddings.embed_query, "sample")
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_create_vector_store_wrong_chunks_type():
+    """
+    Test whether create_vector_store() raises TypeError
+    when chunks is not a list.
+    """
+ 
+    print("\ntest_create_vector_store_wrong_chunks_type")
+ 
+    # Create temporary folder for vector database
+    temp_db_dir = tempfile.mkdtemp()
+ 
+    try:
+        # Expected error
+        expected_output = "TypeError"
+ 
+        # Passing string instead of list should raise TypeError
+        with pytest.raises(TypeError) as error:
+            run_without_internal_prints(
+                create_vector_store,
+                "invalid",
+                temp_db_dir
+            )
+ 
+        # Capture actual error name
+        actual_output = type(error.value).__name__
+ 
+        # Print expected and actual output
+        print(f"Expected Output: {expected_output}")
+        print(f"Actual Output  : {actual_output}")
+ 
+        # Compare expected error with actual error
+        assert actual_output == expected_output
+ 
+    finally:
+        # Delete temporary database folder safely
+        safe_delete_folder(temp_db_dir)
+ 
+ 
+def test_create_vector_store_empty_chunks():
+    """
+    Test whether create_vector_store() raises ValueError
+    when chunks list is empty.
+    """
+ 
+    print("\ntest_create_vector_store_empty_chunks")
+ 
+    # Create temporary folder for vector database
+    temp_db_dir = tempfile.mkdtemp()
+ 
+    try:
+        # Expected error
+        expected_output = "ValueError"
+ 
+        # Empty chunks list should raise ValueError
+        with pytest.raises(ValueError) as error:
+            run_without_internal_prints(
+                create_vector_store,
+                [],
+                temp_db_dir
+            )
+ 
+        # Capture actual error name
+        actual_output = type(error.value).__name__
+ 
+        # Print expected and actual output
+        print(f"Expected Output: {expected_output}")
+        print(f"Actual Output  : {actual_output}")
+ 
+        # Compare expected error with actual error
+        assert actual_output == expected_output
+ 
+    finally:
+        # Delete temporary database folder safely
+        safe_delete_folder(temp_db_dir)
+ 
+ 
+def test_create_vector_store_wrong_db_path_type():
+    """
+    Test whether create_vector_store() raises TypeError
+    when db_path is not a string.
+    """
+ 
+    print("\ntest_create_vector_store_wrong_db_path_type")
+ 
+    # Create temporary document folder
+    temp_docs_dir = create_sample_docs()
+ 
+    try:
+        # Load and split documents to create valid chunks
+        documents = run_without_internal_prints(load_documents, temp_docs_dir)
+        chunks = run_without_internal_prints(split_documents, documents)
+ 
+        # Expected error
+        expected_output = "TypeError"
+ 
+        # Passing integer instead of db_path string should raise TypeError
+        with pytest.raises(TypeError) as error:
+            run_without_internal_prints(
+                create_vector_store,
+                chunks,
+                123
+            )
+ 
+        # Capture actual error name
+        actual_output = type(error.value).__name__
+ 
+        # Print expected and actual output
+        print(f"Expected Output: {expected_output}")
+        print(f"Actual Output  : {actual_output}")
+ 
+        # Compare expected error with actual error
+        assert actual_output == expected_output
+ 
+    finally:
+        # Delete temporary document folder safely
+        safe_delete_folder(temp_docs_dir)
+ 
+ 
+def test_create_vector_store_empty_db_path():
+    """
+    Test whether create_vector_store() raises ValueError
+    when db_path is empty.
+    """
+ 
+    print("\ntest_create_vector_store_empty_db_path")
+ 
+    # Create temporary document folder
+    temp_docs_dir = create_sample_docs()
+ 
+    try:
+        # Load and split documents to create valid chunks
+        documents = run_without_internal_prints(load_documents, temp_docs_dir)
+        chunks = run_without_internal_prints(split_documents, documents)
+ 
+        # Expected error
+        expected_output = "ValueError"
+ 
+        # Empty db_path should raise ValueError
+        with pytest.raises(ValueError) as error:
+            run_without_internal_prints(
+                create_vector_store,
+                chunks,
+                ""
+            )
+ 
+        # Capture actual error name
+        actual_output = type(error.value).__name__
+ 
+        # Print expected and actual output
+        print(f"Expected Output: {expected_output}")
+        print(f"Actual Output  : {actual_output}")
+ 
+        # Compare expected error with actual error
+        assert actual_output == expected_output
+ 
+    finally:
+        # Delete temporary document folder safely
+        safe_delete_folder(temp_docs_dir)
+ 
+ 
+def test_create_vector_store_wrong_number_of_args():
+    """
+    Test whether create_vector_store() raises TypeError
+    when required argument is missing.
+    """
+ 
+    print("\ntest_create_vector_store_wrong_number_of_args")
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # create_vector_store() needs two arguments: chunks and db_path.
+    # Passing only chunks should raise TypeError.
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(create_vector_store, [])
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+test_retrieval.py:
+ 
+# =========================================================
+# UNIT TESTS FOR retrieval_pipeline.py
+# =========================================================
+ 
+# os is used for path operations
+import os
+ 
+# sys is used to add project root path for importing files
+import sys
+ 
+# pytest is used for writing and running test cases
+import pytest
+ 
+# numpy is used to test cosine_similarity() with numpy arrays
+import numpy as np
+ 
+# io and redirect_stdout are used to hide internal print statements
+# from retrieval_pipeline.py during testing
+import io
+from contextlib import redirect_stdout
+ 
+ 
+# =========================================================
+# ADD PROJECT ROOT PATH
+# =========================================================
+ 
+# This allows this test file to import retrieval_pipeline.py
+# from the main project folder.
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ 
+ 
+# =========================================================
+# IMPORT FUNCTIONS FROM retrieval_pipeline.py
+# =========================================================
+ 
+from retrieval_pipeline import (
+    retrieve_documents,
+    generate_answer,
+    cosine_similarity,
+    LocalEmbeddings
+)
+ 
+ 
+# =========================================================
+# HELPER FUNCTION TO HIDE INTERNAL PRINTS
+# =========================================================
+ 
+def run_without_internal_prints(function, *args, **kwargs):
+    """
+    This helper function runs any function while hiding print statements
+    written inside retrieval_pipeline.py.
+ 
+    Reason:
+    retrieval_pipeline.py prints internal messages such as query,
+    result score, generated answer messages, and error messages.
+ 
+    During unit testing, we only want to display:
+    test name, expected output, and actual output.
+    """
+ 
+    # Create a temporary string buffer to capture internal print output
+    hidden_output = io.StringIO()
+ 
+    # Redirect all internal print statements into hidden_output
+    with redirect_stdout(hidden_output):
+        return function(*args, **kwargs)
+ 
+ 
+# =========================================================
+# FAKE VECTORSTORE CLASSES
+# =========================================================
+ 
+class FakeVectorStore:
+    """
+    This fake class is used instead of real Chroma DB.
+ 
+    In the real retrieval pipeline, vectorstore.get() returns a dictionary:
+    {
+        "documents": ["doc1", "doc2"]
+    }
+ 
+    This fake class returns the same structure for testing.
+    """
+ 
+    def __init__(self, documents):
+        # Store test documents
+        self.documents = documents
+ 
+    def get(self):
+        # Return documents in the same format as Chroma vectorstore
+        return {"documents": self.documents}
+ 
+ 
+class FakeVectorStoreWithoutGet:
+    """
+    This fake class does not contain get() method.
+ 
+    This is used to check whether retrieve_documents()
+    raises TypeError when vectorstore does not have get().
+    """
+ 
+    pass
+ 
+ 
+class FakeVectorStoreInvalidReturn:
+    """
+    This fake class contains get() method,
+    but get() returns a list instead of dictionary.
+ 
+    This is used to check whether retrieve_documents()
+    raises TypeError when vectorstore.get() returns invalid data type.
+    """
+ 
+    def get(self):
+        return ["invalid data"]
+ 
+ 
+class FakeVectorStoreWithoutDocumentsKey:
+    """
+    This fake class returns a dictionary,
+    but the dictionary does not contain the required 'documents' key.
+ 
+    This is used to check whether retrieve_documents()
+    raises KeyError when 'documents' key is missing.
+    """
+ 
+    def get(self):
+        return {"data": ["document one"]}
+ 
+ 
+# =========================================================
+# VALID TEST CASES
+# =========================================================
+ 
+def test_retrieve_documents_valid():
+    """
+    Test whether retrieve_documents() returns top matching documents.
+ 
+    Flow:
+    1. Create sample documents.
+    2. Store those documents in FakeVectorStore.
+    3. Create LocalEmbeddings object.
+    4. Call retrieve_documents() with a valid query.
+    5. Check whether top 2 results are returned.
+    """
+ 
+    print("\n" + "=" * 80)
+    print("VALID TEST CASES")
+    print("=" * 80)
+ 
+    print("\ntest_retrieve_documents_valid")
+ 
+    # Sample documents stored inside fake vectorstore
+    docs = [
+        "RAG means Retrieval Augmented Generation",
+        "Vector database stores embeddings",
+        "TF IDF converts text into vectors"
+    ]
+ 
+    # Create fake vectorstore with sample documents
+    vectorstore = FakeVectorStore(docs)
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected output description
+    expected_output = "list containing top 2 retrieved documents"
+ 
+    # Call retrieve_documents() while hiding internal print statements
+    actual_output = run_without_internal_prints(
+        retrieve_documents,
+        "What is RAG",
+        vectorstore,
+        embeddings,
+        2
+    )
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {type(actual_output).__name__}")
+ 
+    # Output should be a list
+    assert isinstance(actual_output, list)
+ 
+    # Since k is 2, output should contain exactly 2 results
+    assert len(actual_output) == 2
+ 
+    # Each result should be a tuple in the format: (score, document)
+    for result in actual_output:
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+ 
+        # First value should be similarity score
+        assert isinstance(result[0], float)
+ 
+        # Second value should be document text
+        assert isinstance(result[1], str)
+ 
+ 
+def test_generate_answer_valid():
+    """
+    Test whether generate_answer() combines retrieved documents
+    into one final answer string.
+ 
+    Flow:
+    1. Create sample retrieval results.
+    2. Pass results to generate_answer().
+    3. Check whether returned answer is a non-empty string.
+    """
+ 
+    print("\ntest_generate_answer_valid")
+ 
+    # Sample retrieved results in format: (score, document)
+    results = [
+        (0.9, "RAG is Retrieval Augmented Generation."),
+        (0.8, "It retrieves relevant documents before generating an answer.")
+    ]
+ 
+    # Expected output description
+    expected_output = "combined string answer"
+ 
+    # Call generate_answer() while hiding internal print statements
+    actual_output = run_without_internal_prints(generate_answer, results)
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {type(actual_output).__name__}")
+ 
+    # Output should be a string
+    assert isinstance(actual_output, str)
+ 
+    # Answer should not be empty
+    assert len(actual_output) > 0
+ 
+    # Check whether answer contains expected document text
+    assert "RAG is Retrieval Augmented Generation." in actual_output
+ 
+ 
+def test_cosine_similarity_valid_with_list():
+    """
+    Test cosine_similarity() using normal Python lists.
+ 
+    Flow:
+    1. Pass two valid vectors.
+    2. Calculate cosine similarity.
+    3. Check whether the result is 0.5.
+    """
+ 
+    print("\ntest_cosine_similarity_valid_with_list")
+ 
+    # Expected cosine similarity for these two vectors is 0.5
+    expected_output = 0.5
+ 
+    # Call cosine_similarity() with two valid vectors
+    actual_output = run_without_internal_prints(
+        cosine_similarity,
+        [1, 0, 1],
+        [1, 1, 0]
+    )
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Output should be float
+    assert isinstance(actual_output, float)
+ 
+    # pytest.approx is used to compare floating point values safely
+    assert actual_output == pytest.approx(expected_output)
+ 
+ 
+def test_cosine_similarity_valid_with_numpy_array():
+    """
+    Test cosine_similarity() using numpy arrays.
+ 
+    Flow:
+    1. Create two numpy vectors.
+    2. Calculate cosine similarity.
+    3. Check whether the result is 0.5.
+    """
+ 
+    print("\ntest_cosine_similarity_valid_with_numpy_array")
+ 
+    # Create numpy array vectors
+    vec1 = np.array([1, 0, 1])
+    vec2 = np.array([1, 1, 0])
+ 
+    # Expected cosine similarity
+    expected_output = 0.5
+ 
+    # Call cosine_similarity() with numpy arrays
+    actual_output = run_without_internal_prints(
+        cosine_similarity,
+        vec1,
+        vec2
+    )
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Output should be float
+    assert isinstance(actual_output, float)
+ 
+    # Compare actual output with expected output
+    assert actual_output == pytest.approx(expected_output)
+ 
+ 
+def test_local_embeddings_embed_documents_valid():
+    """
+    Test whether LocalEmbeddings.embed_documents()
+    creates embeddings for valid documents.
+ 
+    Flow:
+    1. Create LocalEmbeddings object.
+    2. Pass two valid documents.
+    3. Check whether two embedding vectors are returned.
+    """
+ 
+    print("\ntest_local_embeddings_embed_documents_valid")
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected output description
+    expected_output = "list containing two embedding vectors"
+ 
+    # Convert two documents into vectors
+    actual_output = run_without_internal_prints(
+        embeddings.embed_documents,
+        ["document one", "document two"]
+    )
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {type(actual_output).__name__}")
+ 
+    # Output should be a list
+    assert isinstance(actual_output, list)
+ 
+    # Since two documents are passed, output should have two vectors
+    assert len(actual_output) == 2
+ 
+ 
+def test_local_embeddings_embed_query_valid():
+    """
+    Test whether LocalEmbeddings.embed_query()
+    creates vector for valid query after model is fitted.
+ 
+    Flow:
+    1. Create LocalEmbeddings object.
+    2. Fit model using embed_documents().
+    3. Pass a valid query to embed_query().
+    4. Check whether query vector is returned.
+    """
+ 
+    print("\ntest_local_embeddings_embed_query_valid")
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Fit model first using documents
+    run_without_internal_prints(
+        embeddings.embed_documents,
+        ["sample document for testing"]
+    )
+ 
+    # Expected output description
+    expected_output = "non-empty query vector"
+ 
+    # Embed query
+    actual_output = run_without_internal_prints(
+        embeddings.embed_query,
+        "sample"
+    )
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {type(actual_output).__name__}")
+ 
+    # Output should be a list
+    assert isinstance(actual_output, list)
+ 
+    # Query vector should not be empty
+    assert len(actual_output) > 0
+ 
+ 
+# =========================================================
+# INVALID TEST CASES
+# =========================================================
+ 
+def test_retrieve_documents_wrong_query_type():
+    """
+    Test whether retrieve_documents() raises TypeError
+    when query is not a string.
+    """
+ 
+    print("\n" + "=" * 80)
+    print("INVALID TEST CASES")
+    print("=" * 80)
+ 
+    print("\ntest_retrieve_documents_wrong_query_type")
+ 
+    # Create valid fake vectorstore
+    vectorstore = FakeVectorStore(["sample document"])
+ 
+    # Create valid embeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # Passing integer as query should raise TypeError
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            123,
+            vectorstore,
+            embeddings
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_retrieve_documents_empty_query():
+    """
+    Test whether retrieve_documents() raises ValueError
+    when query is an empty string.
+    """
+ 
+    print("\ntest_retrieve_documents_empty_query")
+ 
+    # Create valid fake vectorstore and embeddings
+    vectorstore = FakeVectorStore(["sample document"])
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # Empty query should raise ValueError
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            "",
+            vectorstore,
+            embeddings
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_retrieve_documents_vectorstore_none():
+    """
+    Test whether retrieve_documents() raises ValueError
+    when vectorstore is None.
+    """
+ 
+    print("\ntest_retrieve_documents_vectorstore_none")
+ 
+    # Create valid embeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # vectorstore should not be None
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            "sample query",
+            None,
+            embeddings
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_retrieve_documents_embeddings_none():
+    """
+    Test whether retrieve_documents() raises ValueError
+    when embeddings object is None.
+    """
+ 
+    print("\ntest_retrieve_documents_embeddings_none")
+ 
+    # Create valid fake vectorstore
+    vectorstore = FakeVectorStore(["sample document"])
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # embeddings should not be None
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            "sample query",
+            vectorstore,
+            None
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_retrieve_documents_wrong_k_type():
+    """
+    Test whether retrieve_documents() raises TypeError
+    when k is not an integer.
+    """
+ 
+    print("\ntest_retrieve_documents_wrong_k_type")
+ 
+    # Create valid fake vectorstore and embeddings
+    vectorstore = FakeVectorStore(["sample document"])
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # k should be integer, not string
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            "sample query",
+            vectorstore,
+            embeddings,
+            "2"
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_retrieve_documents_invalid_k_value():
+    """
+    Test whether retrieve_documents() raises ValueError
+    when k is less than or equal to zero.
+    """
+ 
+    print("\ntest_retrieve_documents_invalid_k_value")
+ 
+    # Create valid fake vectorstore and embeddings
+    vectorstore = FakeVectorStore(["sample document"])
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # k should be greater than 0
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            "sample query",
+            vectorstore,
+            embeddings,
+            0
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_retrieve_documents_vectorstore_without_get_method():
+    """
+    Test whether retrieve_documents() raises TypeError
+    when vectorstore does not have get() method.
+    """
+ 
+    print("\ntest_retrieve_documents_vectorstore_without_get_method")
+ 
+    # Create vectorstore without get() method
+    vectorstore = FakeVectorStoreWithoutGet()
+ 
+    # Create valid embeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # This object does not have get() method, so it should raise TypeError
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            "sample query",
+            vectorstore,
+            embeddings
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_retrieve_documents_vectorstore_invalid_return_type():
+    """
+    Test whether retrieve_documents() raises TypeError
+    when vectorstore.get() does not return a dictionary.
+    """
+ 
+    print("\ntest_retrieve_documents_vectorstore_invalid_return_type")
+ 
+    # Create vectorstore whose get() returns list
+    vectorstore = FakeVectorStoreInvalidReturn()
+ 
+    # Create valid embeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # get() returns list instead of dictionary
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            "sample query",
+            vectorstore,
+            embeddings
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_retrieve_documents_missing_documents_key():
+    """
+    Test whether retrieve_documents() raises KeyError
+    when 'documents' key is missing from vectorstore data.
+    """
+ 
+    print("\ntest_retrieve_documents_missing_documents_key")
+ 
+    # Create vectorstore whose get() does not return 'documents' key
+    vectorstore = FakeVectorStoreWithoutDocumentsKey()
+ 
+    # Create valid embeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "KeyError"
+ 
+    # Dictionary does not contain 'documents' key
+    with pytest.raises(KeyError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            "sample query",
+            vectorstore,
+            embeddings
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_retrieve_documents_empty_documents_list():
+    """
+    Test whether retrieve_documents() raises ValueError
+    when vectorstore contains no documents.
+    """
+ 
+    print("\ntest_retrieve_documents_empty_documents_list")
+ 
+    # Create vectorstore with empty documents list
+    vectorstore = FakeVectorStore([])
+ 
+    # Create valid embeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # Empty documents list should raise ValueError
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            "sample query",
+            vectorstore,
+            embeddings
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_retrieve_documents_documents_not_list():
+    """
+    Test whether retrieve_documents() raises TypeError
+    when documents value is not a list.
+    """
+ 
+    print("\ntest_retrieve_documents_documents_not_list")
+ 
+    # Here documents is string instead of list
+    vectorstore = FakeVectorStore("invalid document data")
+ 
+    # Create valid embeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # documents should be list, not string
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            "sample query",
+            vectorstore,
+            embeddings
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_retrieve_documents_documents_with_non_string_value():
+    """
+    Test whether retrieve_documents() raises TypeError
+    when documents list contains non-string value.
+    """
+ 
+    print("\ntest_retrieve_documents_documents_with_non_string_value")
+ 
+    # One document is integer, which is invalid
+    vectorstore = FakeVectorStore(["valid document", 123])
+ 
+    # Create valid embeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # All documents should be strings
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            "sample query",
+            vectorstore,
+            embeddings
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_retrieve_documents_wrong_number_of_args():
+    """
+    Test whether retrieve_documents() raises TypeError
+    when required argument is missing.
+    """
+ 
+    print("\ntest_retrieve_documents_wrong_number_of_args")
+ 
+    # Create fake vectorstore
+    vectorstore = FakeVectorStore(["sample document"])
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # Missing embeddings argument should raise TypeError
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            retrieve_documents,
+            "sample query",
+            vectorstore
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_generate_answer_wrong_type():
+    """
+    Test whether generate_answer() raises TypeError
+    when input is not a list.
+    """
+ 
+    print("\ntest_generate_answer_wrong_type")
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # Passing string instead of list should raise TypeError
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(generate_answer, "invalid")
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_generate_answer_empty_list():
+    """
+    Test whether generate_answer() raises ValueError
+    when empty list is passed.
+    """
+ 
+    print("\ntest_generate_answer_empty_list")
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # Empty result list should raise ValueError
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(generate_answer, [])
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_generate_answer_invalid_result_format():
+    """
+    Test whether generate_answer() raises TypeError
+    when each result is not a tuple of two values.
+    """
+ 
+    print("\ntest_generate_answer_invalid_result_format")
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # Result should be tuple like (score, document)
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(generate_answer, ["invalid result"])
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_generate_answer_invalid_score_type():
+    """
+    Test whether generate_answer() raises TypeError
+    when score is not integer or float.
+    """
+ 
+    print("\ntest_generate_answer_invalid_score_type")
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # Score should be numeric, not string
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            generate_answer,
+            [("high", "sample document")]
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_generate_answer_invalid_document_type():
+    """
+    Test whether generate_answer() raises TypeError
+    when document is not string.
+    """
+ 
+    print("\ntest_generate_answer_invalid_document_type")
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # Document should be string, not integer
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            generate_answer,
+            [(0.9, 123)]
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_generate_answer_empty_document_text():
+    """
+    Test whether generate_answer() raises ValueError
+    when final answer becomes empty.
+    """
+ 
+    print("\ntest_generate_answer_empty_document_text")
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # Document contains only spaces, so final answer is empty
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(
+            generate_answer,
+            [(0.9, "   ")]
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_cosine_similarity_wrong_vec1_type():
+    """
+    Test whether cosine_similarity() raises TypeError
+    when vec1 is not a list or numpy array.
+    """
+ 
+    print("\ntest_cosine_similarity_wrong_vec1_type")
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # vec1 is string, which is invalid
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            cosine_similarity,
+            "invalid",
+            [1, 2, 3]
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_cosine_similarity_wrong_vec2_type():
+    """
+    Test whether cosine_similarity() raises TypeError
+    when vec2 is not a list or numpy array.
+    """
+ 
+    print("\ntest_cosine_similarity_wrong_vec2_type")
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # vec2 is string, which is invalid
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            cosine_similarity,
+            [1, 2, 3],
+            "invalid"
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_cosine_similarity_empty_vector():
+    """
+    Test whether cosine_similarity() raises ValueError
+    when one vector is empty.
+    """
+ 
+    print("\ntest_cosine_similarity_empty_vector")
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # First vector is empty
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(
+            cosine_similarity,
+            [],
+            [1, 2, 3]
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_cosine_similarity_unequal_vector_length():
+    """
+    Test whether cosine_similarity() raises ValueError
+    when both vectors have different dimensions.
+    """
+ 
+    print("\ntest_cosine_similarity_unequal_vector_length")
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # Vector lengths are different
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(
+            cosine_similarity,
+            [1, 2],
+            [1, 2, 3]
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_cosine_similarity_zero_vector():
+    """
+    Test whether cosine_similarity() raises ValueError
+    when one vector is a zero vector.
+    """
+ 
+    print("\ntest_cosine_similarity_zero_vector")
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # Zero vector has magnitude 0, so cosine similarity cannot be calculated
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(
+            cosine_similarity,
+            [0, 0, 0],
+            [1, 2, 3]
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_cosine_similarity_wrong_number_of_args():
+    """
+    Test whether cosine_similarity() raises TypeError
+    when one required argument is missing.
+    """
+ 
+    print("\ntest_cosine_similarity_wrong_number_of_args")
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # cosine_similarity() requires two arguments
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            cosine_similarity,
+            [1, 2, 3]
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_local_embeddings_embed_documents_wrong_type():
+    """
+    Test whether LocalEmbeddings.embed_documents()
+    raises TypeError when input is not a list.
+    """
+ 
+    print("\ntest_local_embeddings_embed_documents_wrong_type")
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "TypeError"
+ 
+    # Passing string instead of list should raise TypeError
+    with pytest.raises(TypeError) as error:
+        run_without_internal_prints(
+            embeddings.embed_documents,
+            "invalid"
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
+ 
+def test_local_embeddings_embed_query_without_fitting():
+    """
+    Test whether LocalEmbeddings.embed_query()
+    raises ValueError when model is not fitted before query embedding.
+    """
+ 
+    print("\ntest_local_embeddings_embed_query_without_fitting")
+ 
+    # Create LocalEmbeddings object
+    embeddings = LocalEmbeddings()
+ 
+    # Expected error
+    expected_output = "ValueError"
+ 
+    # embed_documents() is not called, so model is not fitted
+    with pytest.raises(ValueError) as error:
+        run_without_internal_prints(
+            embeddings.embed_query,
+            "sample query"
+        )
+ 
+    # Capture actual error name
+    actual_output = type(error.value).__name__
+ 
+    # Print expected and actual output
+    print(f"Expected Output: {expected_output}")
+    print(f"Actual Output  : {actual_output}")
+ 
+    # Compare expected error with actual error
+    assert actual_output == expected_output
+ 
