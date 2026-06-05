@@ -1,0 +1,135 @@
+# =========================================================
+# IMPORTS
+# =========================================================
+
+import pytest
+import ast
+import os
+import tempfile
+from code_graph_insert import *
+
+
+# =========================================================
+# HELPER FUNCTION (TRY-CATCH)
+# =========================================================
+
+def validate_exception(func, expected_exception, *args):
+    """
+    Helper function to:
+    - Call function
+    - Catch exception
+    - Validate error type
+    """
+
+    try:
+        func(*args)
+
+        # If no exception occurs → test should fail
+        print("Actual Output  : No Exception")
+        assert False, f"{expected_exception.__name__} not raised"
+
+    except Exception as e:
+        print(f"Actual Output  : {type(e).__name__}")
+        assert isinstance(e, expected_exception)
+
+
+# =========================================================
+# VALID TEST CASES
+# =========================================================
+
+def test_extract_functions_valid():
+    """
+    Valid: multiple functions
+    """
+
+    print("\n[test_extract_functions_valid]")
+
+    tree = ast.parse("def a(): pass\ndef b(): pass")
+    result = extract_functions(tree, "file.py")
+
+    print("Expected Output: 2 functions")
+    print(f"Actual Output  : {len(result)} functions")
+
+    assert len(result) == 2
+
+
+def test_extract_imports_valid():
+    """
+    Valid: import extraction
+    """
+
+    print("\n[test_extract_imports_valid]")
+
+    tree = ast.parse("import os")
+    result = extract_imports(tree)
+
+    print("Expected Output: ['os']")
+    print(f"Actual Output  : {result}")
+
+    assert result == ["os"]
+
+
+def test_get_python_files_valid():
+    """
+    Valid: only .py files are returned
+    """
+
+    print("\n[test_get_python_files_valid]")
+
+    temp_dir = tempfile.mkdtemp()
+    open(os.path.join(temp_dir, "a.py"), "w").close()
+    open(os.path.join(temp_dir, "b.txt"), "w").close()
+
+    result = get_python_files(temp_dir)
+
+    print("Expected Output: 1 Python file")
+    print(f"Actual Output  : {len(result)} files")
+
+    assert len(result) == 1
+
+
+# =========================================================
+# INVALID TEST CASES
+# =========================================================
+
+def test_extract_imports_invalid_input():
+    """
+    Invalid: wrong input type
+    """
+
+    print("\n[test_extract_imports_invalid_input]")
+    print("Expected Output: TypeError")
+
+    validate_exception(extract_imports, TypeError, "invalid")
+
+
+def test_get_python_files_invalid_input():
+    """
+    Invalid: wrong datatype
+    """
+
+    print("\n[test_get_python_files_invalid_input]")
+    print("Expected Output: TypeError")
+
+    validate_exception(get_python_files, TypeError, 123)
+
+
+# =========================================================
+# FAILED TEST CASE (INTENTIONAL)
+# =========================================================
+
+def test_extract_functions_failed_case():
+    """
+    This test is intentionally wrong to demonstrate FAILED output
+    """
+
+    print("\n[test_extract_functions_failed_case]")
+
+    tree = ast.parse("def a(): pass")
+    result = extract_functions(tree, "file.py")
+
+    print("Expected Output: 2 functions")
+    print(f"Actual Output  : {len(result)} functions")
+
+    # Wrong expectation → will FAIL
+    assert len(result) == 2
