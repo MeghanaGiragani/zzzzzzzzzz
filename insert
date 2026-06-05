@@ -1,0 +1,119 @@
+# =========================================================
+# IMPORTS
+# =========================================================
+
+import os        # Used for file handling
+import ast       # Used to parse Python code into AST
+
+
+# =========================================================
+# GET PYTHON FILES
+# =========================================================
+
+def get_python_files(directory):
+    """
+    Returns all Python files (.py) from a given directory.
+    """
+
+    # Input validation
+    if not isinstance(directory, str):
+        raise TypeError("directory must be string")
+
+    # Filter only .py files
+    return [
+        os.path.join(directory, f)
+        for f in os.listdir(directory)
+        if f.endswith(".py")
+    ]
+
+
+# =========================================================
+# EXTRACT IMPORTS
+# =========================================================
+
+def extract_imports(tree):
+    """
+    Extract import statements from AST.
+    """
+
+    if not isinstance(tree, ast.AST):
+        raise TypeError("tree must be AST")
+
+    imports = []
+
+    # Traverse AST nodes
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for n in node.names:
+                imports.append(n.name)
+
+    return imports
+
+
+# =========================================================
+# EXTRACT FUNCTIONS
+# =========================================================
+
+def extract_functions(tree, file_path):
+    """
+    Extract function names and file location from AST.
+    """
+
+    if not isinstance(tree, ast.AST):
+        raise TypeError("tree must be AST")
+
+    funcs = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            funcs.append({
+                "name": node.name,
+                "file": file_path
+            })
+
+    return funcs
+
+
+# =========================================================
+# EXTRACT CYPHER QUERIES
+# =========================================================
+
+def extract_cypher_queries(tree):
+    """
+    Extract queries used inside conn.execute("QUERY")
+    """
+
+    if not isinstance(tree, ast.AST):
+        raise TypeError("tree must be AST")
+
+    queries = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if hasattr(node.func, "attr") and node.func.attr == "execute":
+                if node.args and isinstance(node.args[0], ast.Constant):
+                    queries.append(node.args[0].value)
+
+    return queries
+
+
+# =========================================================
+# QUERY TYPE
+# =========================================================
+
+def get_query_type(query):
+    """
+    Identify query type: MATCH / CREATE / OTHER
+    """
+
+    if not isinstance(query, str):
+        raise TypeError("query must be string")
+
+    q = query.strip().upper()
+
+    if q.startswith("MATCH"):
+        return "MATCH_QUERY"
+    elif q.startswith("CREATE"):
+        return "CREATE_QUERY"
+    else:
+        return "OTHER"
